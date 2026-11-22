@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bike Network Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+/* VOICE: practical, calm, like a city cycling map handed out at a bike shop
+   IDEA: a printed route map with its key on the side, except the key is editable
+   PICTURE: the map itself, full screen; the network lines are the only bright colour
+   COLOUR and TYPE: white or charcoal panel, quiet grey basemap; Overpass (highway-sign lettering)
+   LAYOUT: map fills the screen; key panel docked top-left on wide screens, bottom sheet on phones */
+:root{color-scheme:light dark;--bg:light-dark(#ffffff,#1b1d20);--ink:light-dark(#16181b,#eef0f2);--mute:light-dark(#5d6470,#a3aab4);--line:light-dark(#e3e6ea,#33373d);--chip:light-dark(#f2f4f6,#26292e);--acc:light-dark(#0b6e4f,#3fd19a)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 Overpass,system-ui,sans-serif;overflow:hidden}
+#map{position:absolute;inset:0;background:light-dark(#eef0f2,#1e2124)}
+.panel{position:absolute;z-index:1000;top:12px;left:12px;width:360px;max-height:calc(100% - 24px);display:flex;flex-direction:column;background:var(--bg);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 30px rgb(0 0 0/.18)}
+.head{padding:14px 16px 10px;border-bottom:1px solid var(--line)}
+h1{font-size:21px;line-height:1.1;margin:0 0 2px;font-weight:800}
+.sub{color:var(--mute);font-size:13px;margin:0}
+.body{overflow:auto;padding:10px 16px 14px}
+.row{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.seg{display:flex;background:var(--chip);border-radius:10px;padding:3px;gap:3px;flex:1}
+.seg button{flex:1}
+button,select{font:inherit;font-size:14px;color:var(--ink);background:var(--chip);border:1px solid transparent;border-radius:8px;min-height:38px;padding:6px 10px;cursor:pointer}
+.seg button{background:transparent}
+.seg button[aria-pressed=true]{background:var(--bg);border-color:var(--line);font-weight:600;box-shadow:0 1px 3px rgb(0 0 0/.12)}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.lbl{font-size:12px;color:var(--mute);margin:12px 0 2px;font-weight:600}
+.status{font-size:13px;color:var(--mute);margin:6px 0 2px;min-height:1.4em}
+.status.err{color:light-dark(#b42318,#ff8a80)}
+.key{list-style:none;margin:6px 0 0;padding:0}
+.key li{border-top:1px solid var(--line);padding:8px 0}
+.kt{display:flex;align-items:center;gap:10px}
+.kt input[type=checkbox]{width:18px;height:18px;accent-color:var(--acc);flex:none}
+.sw{flex:none;width:46px;height:18px}
+.nm{flex:1;font-weight:600;font-size:14px;line-height:1.2}
+.nm small{display:block;font-weight:400;color:var(--mute);font-size:12px}
+.km{font-variant-numeric:tabular-nums;color:var(--mute);font-size:13px;white-space:nowrap}
+.ed{display:none;grid-template-columns:auto minmax(0,1fr) auto;gap:6px 10px;align-items:center;margin:8px 0 2px 28px;font-size:13px;color:var(--mute)}
+.editing .ed{display:grid}
+.ed input[type=color]{width:44px;height:32px;padding:0;border:1px solid var(--line);border-radius:6px;background:none}
+.ed input[type=range]{width:100%;accent-color:var(--acc)}
+.ed select{min-height:32px;padding:3px 6px;font-size:13px}
+.ed .w{grid-column:2/4}
+.foot{font-size:12px;color:var(--mute);margin-top:12px;line-height:1.4}
+.foot a{color:inherit}
+.toggle{display:none}
+.drop{font-size:12px;color:var(--mute)}
+.drop input{font-size:12px;max-width:100%}
+.leaflet-popup-content{font:13px/1.4 Overpass,system-ui,sans-serif;margin:10px 12px}
+.leaflet-popup-content b{font-size:14px}
+.pt{color:#666;font-size:12px}
+@media(max-width:600px){
+ .panel{top:auto;bottom:0;left:0;right:0;width:auto;max-height:58%;border-radius:16px 16px 0 0}
+ .panel.min .body{display:none}
+ .toggle{display:block;position:absolute;right:12px;top:10px}
+ .leaflet-bottom.leaflet-right{bottom:70px}
+}
+</style>
+</head>
+<body>
+<div id="map" aria-label="Bike network map"></div>
+<section class="panel" id="panel">
+ <div class="head">
+  <h1 id="ttl">Toronto bike network</h1>
+  <p class="sub">Line style shows how separated each route is from cars</p>
+  <button class="toggle" id="tog" aria-expanded="true">Hide key</button>
+ </div>
+ <div class="body">
+  <div class="row"><div class="seg" role="group" aria-label="City">
+   <button id="c-toronto" aria-pressed="true">Toronto</button>
+   <button id="c-edmonton" aria-pressed="false">Edmonton</button>
+  </div><button id="here" title="Load the bike network for whatever area is on screen">Load this view</button></div>
+  <div class="lbl">Style lines by</div>
+  <div class="row"><div class="seg" role="group" aria-label="Style mode">
+   <button id="m-type" aria-pressed="true">Type of route</button>
+   <button id="m-comfort" aria-pressed="false">Comfort level</button>
+  </div></div>
+  <div class="status" id="status" role="status">Starting…</div>
+  <ul class="key" id="key"></ul>
+  <div class="row">
+   <button id="edit" aria-pressed="false">Customize styles</button>
+   <select id="base" aria-label="Basemap">
+    <option value="light">Light basemap</option><option value="dark">Dark basemap</option><option value="osm">OSM standard</option><option value="none">No basemap</option>
+   </select>
+   <button id="reset" hidden>Reset styles</button>
+  </div>
+  <div class="drop" id="drop" hidden><div class="lbl">Couldn't reach OpenStreetMap? Load a file instead</div>
+   <input type="file" id="file" accept=".json,.geojson"> Overpass JSON or GeoJSON export</div>
+  <p class="foot">Data: live from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> through the Overpass API. Comfort levels follow the Can-BICS idea (high: protected from cars; medium: shared with walkers; low: paint only). Tap any line to see its tags.</p>
+ </div>
+</section>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+{
+const CITIES={
+ toronto:{name:'Toronto',bbox:[43.581,-79.639,43.855,-79.115],center:[43.6629,-79.3957],zoom:13},
+ edmonton:{name:'Edmonton',bbox:[53.395,-113.714,53.716,-113.271],center:[53.5444,-113.4909],zoom:13}
+};
+const CATS=[
+ {id:'protected',name:'Protected bike lane',note:'Cycle track or lane with a physical barrier',comfort:'high'},
+ {id:'path',name:'Off-street bike path',note:'Bike-only path away from the road',comfort:'high'},
+ {id:'multiuse',name:'Multi-use trail',note:'Shared with people walking',comfort:'medium'},
+ {id:'buffered',name:'Buffered painted lane',note:'Paint with an extra painted gap',comfort:'low'},
+ {id:'painted',name:'Painted bike lane',note:'Paint line only',comfort:'low'},
+ {id:'shared',name:'Sharrow / shared lane',note:'Markings only, ride with traffic',comfort:'none'}
+];
+const COMFORT=[
+ {id:'high',name:'High comfort',note:'Protected lanes and bike paths'},
+ {id:'medium',name:'Medium comfort',note:'Multi-use trails'},
+ {id:'low',name:'Low comfort',note:'Painted lanes on the road'},
+ {id:'none',name:'Not rated',note:'Sharrows, mixed with traffic'}
+];
+const DASHES={solid:'',dashed:'10 7',long:'18 8',dotted:'1 6',dashdot:'12 5 2 5'};
+const DEF={
+ type:{protected:{c:'#0b7a3e',w:6,d:'solid'},path:{c:'#22a45d',w:5,d:'solid'},multiuse:{c:'#2b7bd6',w:4,d:'dashed'},buffered:{c:'#e9a100',w:4,d:'solid'},painted:{c:'#f26b1d',w:3,d:'solid'},shared:{c:'#d42a2a',w:3,d:'dotted'}},
+ comfort:{high:{c:'#0f8a46',w:6,d:'solid'},medium:{c:'#2b7bd6',w:4,d:'dashed'},low:{c:'#f07c1a',w:3,d:'solid'},none:{c:'#d42a2a',w:3,d:'dotted'}}
+};
+const clone=o=>JSON.parse(JSON.stringify(o));
+let styles=clone(DEF),mode='type',city='toronto',hidden={},editing=false;
+try{const s=JSON.parse(localStorage.getItem('bikemap-v1')||'null');if(s){styles={type:{...DEF.type,...s.styles?.type},comfort:{...DEF.comfort,...s.styles?.comfort}};mode=s.mode||mode;city=s.city||city;hidden=s.hidden||{}}}catch(e){}
+const save=()=>{try{localStorage.setItem('bikemap-v1',JSON.stringify({styles,mode,city,hidden}))}catch(e){}};
+
+/* ---------- classification from OSM tags ---------- */
+const STREET=/\b(street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|crescent|cres|parkway|pkwy)\.?(\s+(north|south|east|west|n|s|e|w|nw|ne|sw|se))?$/i;
+const PHYS=/^(kerb|bollard|flex_?post|vertical_panel|planter|jersey_barrier|guard_rail|fence|wall|parking_lane|separation_kerb|bump|grass_verge|tree_row)/;
+const RANK={protected:4,buffered:3,painted:2,shared:1};
+function classify(t){
+ const hw=t.highway||'';
+ if(hw==='cycleway'){
+  if(t.is_sidepath==='yes'||t.cycleway==='track'||t.cycleway==='sidepath'||STREET.test(t.name||''))return 'protected';
+  if((t.foot==='designated'||t.foot==='yes')&&t.segregated!=='yes')return 'multiuse';
+  return 'path';
+ }
+ if(/^(path|footway|pedestrian|track|bridleway|service)$/.test(hw)&&/^(designated|yes)$/.test(t.bicycle||'')&&!/^(lane|track|shared_lane)/.test(t.cycleway||''))return 'multiuse';
+ let best=null;
+ for(const k of ['cycleway','cycleway:both','cycleway:left','cycleway:right']){
+  const v=t[k];if(!v)continue;let c=null;
+  if(/^(track|opposite_track)$/.test(v))c='protected';
+  else if(/^(lane|opposite_lane)$/.test(v)){
+   const extra=Object.keys(t).filter(x=>(x.startsWith(k+':')||k==='cycleway'&&x.startsWith('cycleway:both:'))&&/(separation|buffer)/.test(x)).map(x=>t[x]).filter(x=>x&&x!=='no');
+   c=extra.some(x=>PHYS.test(x))?'protected':extra.length?'buffered':'painted';
+  }
+  else if(/^(shared_lane|share_busway|opposite_share_busway|shared)$/.test(v))c='shared';
+  if(c&&(!best||RANK[c]>RANK[best]))best=c;
+ }
+ return best;
+}
+const comfortOf=cat=>CATS.find(c=>c.id===cat).comfort;
+const groupOf=cat=>mode==='type'?cat:comfortOf(cat);
+
+/* ---------- map ---------- */
+const map=L.map('map',{preferCanvas:true,zoomControl:false}).setView(CITIES[city].center,CITIES[city].zoom);
+L.control.zoom({position:'topright'}).addTo(map);
+const renderer=L.canvas({padding:.4,tolerance:6});
+const BASES={
+ light:['https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png','&copy; OpenStreetMap contributors &copy; CARTO'],
+ dark:['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png','&copy; OpenStreetMap contributors &copy; CARTO'],
+ osm:['https://tile.openstreetmap.org/{z}/{x}/{y}.png','&copy; OpenStreetMap contributors']
+};
+let baseLayer=null;
+function setBase(b){if(baseLayer)map.removeLayer(baseLayer);baseLayer=null;if(BASES[b])baseLayer=L.tileLayer(BASES[b][0],{attribution:BASES[b][1],maxZoom:19,subdomains:'abcd'}).addTo(map);$('base').value=b}
+const $=id=>document.getElementById(id);
+const dark=document.documentElement.dataset.theme==='dark'||(!document.documentElement.dataset.theme&&matchMedia('(prefers-color-scheme: dark)').matches);
+setBase(dark?'dark':'light');
+
+const layers={};CATS.forEach(c=>layers[c.id]=L.layerGroup());
+let lengths={};
+// draw weakest first so protected routes sit on top
+[...CATS].reverse().forEach(c=>layers[c.id].addTo(map));
+
+function styleFor(cat){const s=styles[mode][groupOf(cat)];return{color:s.c,weight:s.w,dashArray:DASHES[s.d]||null,lineCap:s.d==='dotted'?'round':'butt',opacity:.95}}
+function hav(a,b){const R=6371,r=Math.PI/180,dl=(b[0]-a[0])*r,dn=(b[1]-a[1])*r,x=Math.sin(dl/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(x))}
+const SHOW=['name','highway','cycleway','cycleway:both','cycleway:left','cycleway:right','cycleway:right:separation','cycleway:left:separation','cycleway:both:buffer','bicycle','foot','segregated','surface','lit','oneway:bicycle'];
+const esc=s=>String(s).replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+function popup(t,cat,id){const c=CATS.find(x=>x.id===cat);return `<b>${esc(t.name||'Unnamed route')}</b><br>${esc(c.name)} · ${esc(COMFORT.find(x=>x.id===c.comfort).name)}<div class="pt">${SHOW.filter(k=>t[k]&&k!=='name').map(k=>esc(k)+' = '+esc(t[k])).join('<br>')}</div>${id?`<a href="https://www.openstreetmap.org/way/${id}" target="_blank" rel="noopener">View on OpenStreetMap</a>`:''}`}
+
+function addWays(ways){
+ CATS.forEach(c=>{layers[c.id].clearLayers();lengths[c.id]=0});
+ let n=0;
+ for(const w of ways){
+  const cat=classify(w.tags||{});if(!cat||!w.coords||w.coords.length<2)continue;
+  const pl=L.polyline(w.coords,{renderer,...styleFor(cat)});
+  pl._cat=cat;pl.bindPopup(()=>popup(w.tags,cat,w.id));
+  layers[cat].addLayer(pl);n++;
+  for(let i=1;i<w.coords.length;i++)lengths[cat]+=hav(w.coords[i-1],w.coords[i]);
+ }
+ drawKey();return n;
+}
+function restyle(){CATS.forEach(c=>{const st=styleFor(c.id);layers[c.id].eachLayer(l=>l.setStyle(st))});applyHidden()}
+let raf=0;const restyleSoon=()=>{cancelAnimationFrame(raf);raf=requestAnimationFrame(restyle)};
+function applyHidden(){let added=false;CATS.forEach(c=>{const off=hidden[mode+':'+groupOf(c.id)];if(off)map.removeLayer(layers[c.id]);else if(!map.hasLayer(layers[c.id])){layers[c.id].addTo(map);added=true}});
+ // keep protected routes drawn on top after a layer is switched back on
+ if(added)[...CATS].reverse().forEach(c=>{if(map.hasLayer(layers[c.id]))layers[c.id].eachLayer(l=>l.bringToFront())})}
+
+/* ---------- key / legend ---------- */
+function swatch(s){const d=DASHES[s.d]||'';return `<svg class="sw" viewBox="0 0 46 18" aria-hidden="true"><line x1="3" y1="9" x2="43" y2="9" stroke="${s.c}" stroke-width="${s.w}" stroke-dasharray="${d}" stroke-linecap="${s.d==='dotted'?'round':'butt'}"/></svg>`}
+function drawKey(){
+ const groups=mode==='type'?CATS:COMFORT;
+ $('key').innerHTML=groups.map(g=>{
+  const s=styles[mode][g.id];
+  const km=mode==='type'?lengths[g.id]||0:CATS.filter(c=>c.comfort===g.id).reduce((a,c)=>a+(lengths[c.id]||0),0);
+  const on=!hidden[mode+':'+g.id];
+  return `<li data-g="${g.id}"><div class="kt"><input type="checkbox" id="v-${g.id}" ${on?'checked':''} aria-label="Show ${esc(g.name)}">${swatch(s)}<label class="nm" for="v-${g.id}">${esc(g.name)}<small>${esc(g.note)}</small></label><span class="km">${km?km.toFixed(0)+' km':''}</span></div>
+  <div class="ed"><input type="color" value="${s.c}" data-k="c" aria-label="Colour"><span>Thickness</span><output>${s.w}px</output>
+  <span></span><input class="w" type="range" min="1" max="12" step="0.5" value="${s.w}" data-k="w" aria-label="Thickness">
+  <span>Line</span><select class="w" data-k="d" aria-label="Line pattern">${Object.keys(DASHES).map(d=>`<option value="${d}" ${d===s.d?'selected':''}>${{solid:'Solid',dashed:'Dashed',long:'Long dash',dotted:'Dotted',dashdot:'Dash-dot'}[d]}</option>`).join('')}</select></div></li>`}).join('');
+ $('panel').classList.toggle('editing',editing);
+}
+$('key').addEventListener('input',e=>{
+ const li=e.target.closest('li');if(!li)return;const g=li.dataset.g;
+ if(e.target.type==='checkbox'){hidden[mode+':'+g]=!e.target.checked;applyHidden();save();return}
+ const k=e.target.dataset.k;if(!k)return;
+ styles[mode][g][k]=k==='w'?+e.target.value:e.target.value;
+ li.querySelector('.sw').outerHTML=swatch(styles[mode][g]);
+ if(k==='w')li.querySelector('output').textContent=e.target.value+'px';
+ restyleSoon();save();
+});
+
+/* ---------- loading ---------- */
+const ENDPOINTS=['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
+function query(b){const bb=b.join(',');const L1='lane|opposite_lane|track|opposite_track|shared_lane|share_busway|opposite_share_busway';
+ return `[out:json][timeout:150];(way["highway"="cycleway"](${bb});way["highway"~"^(path|footway|pedestrian|track|bridleway)$"]["bicycle"~"^(designated|yes)$"](${bb});way["cycleway"~"^(${L1})$"](${bb});way["cycleway:both"~"^(${L1})$"](${bb});way["cycleway:left"~"^(${L1})$"](${bb});way["cycleway:right"~"^(${L1})$"](${bb}););out tags geom qt;`}
+const cache={};let loadId=0;
+function status(t,err){const s=$('status');s.textContent=t;s.classList.toggle('err',!!err)}
+async function fetchOverpass(q){
+ let last;
+ for(const url of ENDPOINTS){
+  try{const r=await fetch(url,{method:'POST',body:'data='+encodeURIComponent(q),headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+   if(!r.ok)throw new Error('HTTP '+r.status);return await r.json()}catch(e){last=e}
+ }throw last;
+}
+const fromOverpass=j=>(j.elements||[]).filter(e=>e.type==='way'&&e.geometry).map(e=>({id:e.id,tags:e.tags||{},coords:e.geometry.map(p=>[p.lat,p.lon])}));
+async function load(key,bbox,label){
+ const id=++loadId;
+ if(cache[key]){const n=addWays(cache[key]);status(`${n.toLocaleString()} route segments in ${label}`);return}
+ status(`Loading ${label} from OpenStreetMap… big cities take 20 to 60 seconds`);
+ try{
+  const ways=fromOverpass(await fetchOverpass(query(bbox)));
+  if(id!==loadId)return;cache[key]=ways;
+  const n=addWays(ways);status(`${n.toLocaleString()} route segments in ${label}`);applyHidden();
+ }catch(e){if(id!==loadId)return;status(`Couldn't load data (${e.message}). Try again in a minute, or load a file below.`,true);$('drop').hidden=false}
+}
+function setCity(c){city=c;save();
+ ['toronto','edmonton'].forEach(k=>$('c-'+k).setAttribute('aria-pressed',k===c));
+ $('ttl').textContent=CITIES[c].name+' bike network';
+ map.setView(CITIES[c].center,CITIES[c].zoom);load(c,CITIES[c].bbox,CITIES[c].name)}
+function setMode(m){mode=m;save();$('m-type').setAttribute('aria-pressed',m==='type');$('m-comfort').setAttribute('aria-pressed',m==='comfort');restyle();drawKey()}
+
+$('c-toronto').onclick=()=>setCity('toronto');
+$('c-edmonton').onclick=()=>setCity('edmonton');
+$('m-type').onclick=()=>setMode('type');
+$('m-comfort').onclick=()=>setMode('comfort');
+$('base').onchange=e=>setBase(e.target.value);
+$('edit').onclick=()=>{editing=!editing;$('edit').setAttribute('aria-pressed',editing);$('edit').textContent=editing?'Done customizing':'Customize styles';$('reset').hidden=!editing;drawKey()};
+$('reset').onclick=()=>{styles[mode]=clone(DEF[mode]);restyle();drawKey();save()};
+$('here').onclick=()=>{
+ if(map.getZoom()<11){status('Zoom in a bit further first (this keeps the download manageable).',true);return}
+ const b=map.getBounds();$('ttl').textContent='Bike network in this view';
+ ['toronto','edmonton'].forEach(k=>$('c-'+k).setAttribute('aria-pressed',false));
+ load('view'+b.toBBoxString(),[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()].map(x=>+x.toFixed(4)),'this view')};
+$('tog').onclick=()=>{const m=$('panel').classList.toggle('min');$('tog').textContent=m?'Show key':'Hide key';$('tog').setAttribute('aria-expanded',!m)};
+$('file').onchange=async e=>{
+ const f=e.target.files[0];if(!f)return;
+ try{const j=JSON.parse(await f.text());let ways;
+  if(j.elements)ways=fromOverpass(j);
+  else ways=(j.features||[]).flatMap(ft=>{const g=ft.geometry||{},t=ft.properties?.tags||ft.properties||{};
+   const lines=g.type==='LineString'?[g.coordinates]:g.type==='MultiLineString'?g.coordinates:[];
+   return lines.map(cs=>({id:(String(t['@id']||ft.id||'').match(/\d+/)||[''])[0],tags:t,coords:cs.map(p=>[p[1],p[0]])}))});
+  const n=addWays(ways);status(`${n.toLocaleString()} route segments from ${f.name}`);applyHidden();
+  const all=ways.flatMap(w=>w.coords);if(all.length)map.fitBounds(all);
+ }catch(err){status('That file could not be read as Overpass JSON or GeoJSON.',true)}
+};
+setMode(mode);setCity(city);
+}
+</script>
+</body>
+</html>
