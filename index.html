@@ -93,17 +93,15 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
   </div>
   <div class="drop" id="drop" hidden><div class="lbl">Couldn't reach OpenStreetMap? Load a file instead</div>
    <input type="file" id="file" accept=".json,.geojson"> Overpass JSON or GeoJSON export</div>
-  <p class="foot">Data: live from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> through the Overpass API. Basemap: Esri gray canvas. Comfort levels follow the Can-BICS idea (high: protected from cars; medium: shared with walkers; low: paint only). Tap any line to see its tags.</p>
+  <p class="foot">*Thickness is at street level; lines thin out as you zoom out. Data: <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, saved weekly for both cities; Load this view fetches live through the Overpass API. Basemap: Esri gray canvas. Comfort levels follow the Can-BICS idea (high: protected from cars; medium: shared with walkers; low: paint only). Tap any line to see its tags.</p>
  </div>
 </section>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="classify.js"></script>
 <script>
 {
-const CITIES={
- toronto:{name:'Toronto',bbox:[43.581,-79.639,43.855,-79.115],center:[43.6629,-79.3957],zoom:13},
- edmonton:{name:'Edmonton',bbox:[53.395,-113.714,53.716,-113.271],center:[53.5444,-113.4909],zoom:13}
-};
+const CITIES=window.BIKE_CITIES;
 const CATS=[
  {id:'protected',name:'Protected bike lane',note:'Cycle track or lane with a physical barrier',comfort:'high'},
  {id:'path',name:'Off-street bike path',note:'Bike-only path away from the road',comfort:'high'},
@@ -128,31 +126,7 @@ let styles=clone(DEF),mode='type',city='toronto',hidden={},editing=false;
 try{const s=JSON.parse(localStorage.getItem('bikemap-v1')||'null');if(s){styles={type:{...DEF.type,...s.styles?.type},comfort:{...DEF.comfort,...s.styles?.comfort}};mode=s.mode||mode;city=s.city||city;hidden=s.hidden||{}}}catch(e){}
 const save=()=>{try{localStorage.setItem('bikemap-v1',JSON.stringify({styles,mode,city,hidden}))}catch(e){}};
 
-/* ---------- classification from OSM tags ---------- */
-const STREET=/\b(street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|crescent|cres|parkway|pkwy)\.?(\s+(north|south|east|west|n|s|e|w|nw|ne|sw|se))?$/i;
-const PHYS=/^(kerb|bollard|flex_?post|vertical_panel|planter|jersey_barrier|guard_rail|fence|wall|parking_lane|separation_kerb|bump|grass_verge|tree_row)/;
-const RANK={protected:4,buffered:3,painted:2,shared:1};
-function classify(t){
- const hw=t.highway||'';
- if(hw==='cycleway'){
-  if(t.is_sidepath==='yes'||t.cycleway==='track'||t.cycleway==='sidepath'||STREET.test(t.name||''))return 'protected';
-  if((t.foot==='designated'||t.foot==='yes')&&t.segregated!=='yes')return 'multiuse';
-  return 'path';
- }
- if(/^(path|footway|pedestrian|track|bridleway|service)$/.test(hw)&&/^(designated|yes)$/.test(t.bicycle||'')&&!/^(lane|track|shared_lane)/.test(t.cycleway||''))return 'multiuse';
- let best=null;
- for(const k of ['cycleway','cycleway:both','cycleway:left','cycleway:right']){
-  const v=t[k];if(!v)continue;let c=null;
-  if(/^(track|opposite_track)$/.test(v))c='protected';
-  else if(/^(lane|opposite_lane)$/.test(v)){
-   const extra=Object.keys(t).filter(x=>(x.startsWith(k+':')||k==='cycleway'&&x.startsWith('cycleway:both:'))&&/(separation|buffer)/.test(x)).map(x=>t[x]).filter(x=>x&&x!=='no');
-   c=extra.some(x=>PHYS.test(x))?'protected':extra.length?'buffered':'painted';
-  }
-  else if(/^(shared_lane|share_busway|opposite_share_busway|shared)$/.test(v))c='shared';
-  if(c&&(!best||RANK[c]>RANK[best]))best=c;
- }
- return best;
-}
+const classify=window.classifyBikeWay;
 const comfortOf=cat=>CATS.find(c=>c.id===cat).comfort;
 const groupOf=cat=>mode==='type'?cat:comfortOf(cat);
 
@@ -177,8 +151,15 @@ const layers={};CATS.forEach(c=>layers[c.id]=L.layerGroup());
 let lengths={};
 // draw weakest first so protected routes sit on top
 [...CATS].reverse().forEach(c=>layers[c.id].addTo(map));
+map.on('zoomend',()=>restyle());
 
-function styleFor(cat){const s=styles[mode][groupOf(cat)];return{color:s.c,weight:s.w,dashArray:DASHES[s.d]||null,lineCap:s.d==='dotted'?'round':'butt',opacity:.95}}
+// Thickness is set for street level (zoom 15). Zoomed out, lines thin out so they don't merge,
+// and on-road paint/sharrows fade so the separated network stands out.
+const zf=z=>Math.min(1.35,Math.max(.22,2**((z-15)/2.2)));
+function styleFor(cat){const s=styles[mode][groupOf(cat)],z=map.getZoom(),f=zf(z);
+ const dash=DASHES[s.d]?DASHES[s.d].split(' ').map(n=>Math.max(1,+n*Math.max(f,.45)).toFixed(1)).join(' '):null;
+ const weak=comfortOf(cat)==='low'||comfortOf(cat)==='none';
+ return{color:s.c,weight:Math.max(.8,s.w*f),dashArray:dash,lineCap:s.d==='dotted'?'round':'butt',opacity:weak&&z<13?Math.max(.45,.95-(13-z)*.2):.95}}
 function hav(a,b){const R=6371,r=Math.PI/180,dl=(b[0]-a[0])*r,dn=(b[1]-a[1])*r,x=Math.sin(dl/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(x))}
 const SHOW=['name','highway','cycleway','cycleway:both','cycleway:left','cycleway:right','cycleway:right:separation','cycleway:left:separation','cycleway:both:buffer','bicycle','foot','segregated','surface','lit','oneway:bicycle'];
 const esc=s=>String(s).replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
@@ -188,7 +169,7 @@ function addWays(ways){
  CATS.forEach(c=>{layers[c.id].clearLayers();lengths[c.id]=0});
  let n=0;
  for(const w of ways){
-  const cat=classify(w.tags||{});if(!cat||!w.coords||w.coords.length<2)continue;
+  const cat=w.cat||classify(w.tags||{});if(!cat||!w.coords||w.coords.length<2)continue;
   const pl=L.polyline(w.coords,{renderer,...styleFor(cat)});
   pl._cat=cat;pl.bindPopup(()=>popup(w.tags,cat,w.id));
   layers[cat].addLayer(pl);n++;
@@ -211,7 +192,7 @@ function drawKey(){
   const km=mode==='type'?lengths[g.id]||0:CATS.filter(c=>c.comfort===g.id).reduce((a,c)=>a+(lengths[c.id]||0),0);
   const on=!hidden[mode+':'+g.id];
   return `<li data-g="${g.id}"><div class="kt"><input type="checkbox" id="v-${g.id}" ${on?'checked':''} aria-label="Show ${esc(g.name)}">${swatch(s)}<label class="nm" for="v-${g.id}">${esc(g.name)}<small>${esc(g.note)}</small></label><span class="km">${km?km.toFixed(0)+' km':''}</span></div>
-  <div class="ed"><input type="color" value="${s.c}" data-k="c" aria-label="Colour"><span>Thickness</span><output>${s.w}px</output>
+  <div class="ed"><input type="color" value="${s.c}" data-k="c" aria-label="Colour"><span>Thickness*</span><output>${s.w}px</output>
   <span></span><input class="w" type="range" min="1" max="12" step="0.5" value="${s.w}" data-k="w" aria-label="Thickness">
   <span>Line</span><select class="w" data-k="d" aria-label="Line pattern">${Object.keys(DASHES).map(d=>`<option value="${d}" ${d===s.d?'selected':''}>${{solid:'Solid',dashed:'Dashed',long:'Long dash',dotted:'Dotted',dashdot:'Dash-dot'}[d]}</option>`).join('')}</select></div></li>`}).join('');
  $('panel').classList.toggle('editing',editing);
@@ -228,8 +209,7 @@ $('key').addEventListener('input',e=>{
 
 /* ---------- loading ---------- */
 const ENDPOINTS=['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
-function query(b){const bb=b.join(',');const L1='lane|opposite_lane|track|opposite_track|shared_lane|share_busway|opposite_share_busway';
- return `[out:json][timeout:150];(way["highway"="cycleway"](${bb});way["highway"~"^(path|footway|pedestrian|track|bridleway)$"]["bicycle"~"^(designated|yes)$"](${bb});way["cycleway"~"^(${L1})$"](${bb});way["cycleway:both"~"^(${L1})$"](${bb});way["cycleway:left"~"^(${L1})$"](${bb});way["cycleway:right"~"^(${L1})$"](${bb}););out tags geom qt;`}
+const query=window.bikeQuery;
 const cache={};let loadId=0;
 function status(t,err){const s=$('status');s.textContent=t;s.classList.toggle('err',!!err)}
 async function fetchOverpass(q){
@@ -240,20 +220,29 @@ async function fetchOverpass(q){
  }throw last;
 }
 const fromOverpass=j=>(j.elements||[]).filter(e=>e.type==='way'&&e.geometry).map(e=>({id:e.id,tags:e.tags||{},coords:e.geometry.map(p=>[p.lat,p.lon])}));
-async function load(key,bbox,label){
+const fromBundle=j=>j.ways.map(w=>({id:w[0],cat:w[1],tags:w[2],coords:w[3]}));
+async function loadBundle(key){const r=await fetch(`data/${key}.json`,{cache:'no-cache'});if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}
+async function load(key,bbox,label,allowBundle){
  const id=++loadId;
- if(cache[key]){const n=addWays(cache[key]);status(`${n.toLocaleString()} route segments in ${label}`);return}
- status(`Loading ${label} from OpenStreetMap… big cities take 20 to 60 seconds`);
+ if(cache[key]){const n=addWays(cache[key].ways);status(`${n.toLocaleString()} route segments in ${label}${cache[key].note}`);return}
+ if(allowBundle){
+  status(`Loading ${label}…`);
+  try{const j=await loadBundle(key);if(id!==loadId)return;
+   const note=` · OSM data from ${new Date(j.generated).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})}`;
+   cache[key]={ways:fromBundle(j),note};const n=addWays(cache[key].ways);status(`${n.toLocaleString()} route segments in ${label}${note}`);applyHidden();return}
+  catch(e){if(id!==loadId)return}
+ }
+ status(`Loading ${label} live from OpenStreetMap… big areas take 20 to 60 seconds`);
  try{
   const ways=fromOverpass(await fetchOverpass(query(bbox)));
-  if(id!==loadId)return;cache[key]=ways;
-  const n=addWays(ways);status(`${n.toLocaleString()} route segments in ${label}`);applyHidden();
+  if(id!==loadId)return;cache[key]={ways,note:' · live OSM data'};
+  const n=addWays(ways);status(`${n.toLocaleString()} route segments in ${label} · live OSM data`);applyHidden();
  }catch(e){if(id!==loadId)return;status(`Couldn't load data (${e.message}). Try again in a minute, or load a file below.`,true);$('drop').hidden=false}
 }
 function setCity(c){city=c;save();
  ['toronto','edmonton'].forEach(k=>$('c-'+k).setAttribute('aria-pressed',k===c));
  $('ttl').textContent=CITIES[c].name+' bike network';
- map.setView(CITIES[c].center,CITIES[c].zoom);load(c,CITIES[c].bbox,CITIES[c].name)}
+ map.setView(CITIES[c].center,CITIES[c].zoom);load(c,CITIES[c].bbox,CITIES[c].name,true)}
 function setMode(m){mode=m;save();$('m-type').setAttribute('aria-pressed',m==='type');$('m-comfort').setAttribute('aria-pressed',m==='comfort');restyle();drawKey()}
 
 $('c-toronto').onclick=()=>setCity('toronto');
