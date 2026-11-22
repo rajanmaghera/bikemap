@@ -51,6 +51,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 .foot{font-size:12px;color:var(--mute);margin-top:12px;line-height:1.4}
 .foot a{color:inherit}
 .toggle{display:none}
+.opw{display:grid;grid-template-columns:auto minmax(0,1fr) 3.2em;gap:10px;align-items:center;font-size:13px;color:var(--mute);margin:4px 0}.opw[hidden]{display:none}.opw input{accent-color:var(--acc);width:100%}.opw output{text-align:right;font-variant-numeric:tabular-nums}
 .drop{font-size:12px;color:var(--mute)}
 .drop input{font-size:12px;max-width:100%}
 .leaflet-popup-content{font:13px/1.4 Overpass,system-ui,sans-serif;margin:10px 12px}
@@ -87,10 +88,11 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
   <div class="row">
    <button id="edit" aria-pressed="false">Customize styles</button>
    <select id="base" aria-label="Basemap">
-    <option value="light">Light basemap</option><option value="dark">Dark basemap</option><option value="osm">OSM standard</option><option value="none">No basemap</option>
+    <option value="light">Light basemap</option><option value="dark">Dark basemap</option><option value="osm">OSM standard</option><option value="sat">Satellite</option><option value="none">No basemap</option>
    </select>
    <button id="reset" hidden>Reset styles</button>
   </div>
+  <div class="opw" id="opwrap"><label for="op">Basemap opacity</label><input type="range" id="op" min="0" max="1" step="0.05" value="1"><output id="opv">100%</output></div>
   <div class="drop" id="drop" hidden><div class="lbl">Couldn't reach OpenStreetMap? Load a file instead</div>
    <input type="file" id="file" accept=".json,.geojson"> Overpass JSON or GeoJSON export</div>
   <p class="foot">*Thickness is at street level; lines thin out as you zoom out. Data: <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, saved weekly for both cities; Load this view fetches live through the Overpass API. Basemap: Esri gray canvas. Comfort levels follow the Can-BICS idea (high: protected from cars; medium: shared with walkers; low: paint only). Tap any line to see its tags.</p>
@@ -124,7 +126,7 @@ const DEF={
 const clone=o=>JSON.parse(JSON.stringify(o));
 let styles=clone(DEF),mode='type',city='toronto',hidden={},editing=false;
 try{const s=JSON.parse(localStorage.getItem('bikemap-v1')||'null');if(s){styles={type:{...DEF.type,...s.styles?.type},comfort:{...DEF.comfort,...s.styles?.comfort}};mode=s.mode||mode;city=s.city||city;hidden=s.hidden||{}}}catch(e){}
-const save=()=>{try{localStorage.setItem('bikemap-v1',JSON.stringify({styles,mode,city,hidden}))}catch(e){}};
+const save=()=>{try{localStorage.setItem('bikemap-v1',JSON.stringify({styles,mode,city,hidden,base:typeof baseName!=='undefined'?baseName:undefined,opacity:typeof baseOpacity!=='undefined'?baseOpacity:undefined}))}catch(e){}};
 
 const classify=window.classifyBikeWay;
 const comfortOf=cat=>CATS.find(c=>c.id===cat).comfort;
@@ -138,14 +140,19 @@ const ESRI='https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/',EATT='
 const BASES={
  light:[[ESRI+'World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',EATT,16],[ESRI+'World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}','',16]],
  dark:[[ESRI+'World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',EATT,16],[ESRI+'World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}','',16]],
- osm:[['https://tile.openstreetmap.org/{z}/{x}/{y}.png','&copy; OpenStreetMap contributors',19]]
+ osm:[['https://tile.openstreetmap.org/{z}/{x}/{y}.png','&copy; OpenStreetMap contributors',19]],
+ sat:[['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}','Imagery &copy; Esri, Maxar, Earthstar Geographics, and the GIS user community',19],['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}','',19]]
 };
 map.createPane('labels');map.getPane('labels').style.zIndex=450;map.getPane('labels').style.pointerEvents='none';
 let baseLayers=[];
-function setBase(b){baseLayers.forEach(l=>map.removeLayer(l));baseLayers=(BASES[b]||[]).map(([u,a,z],i)=>L.tileLayer(u,{attribution:a,maxNativeZoom:z,maxZoom:19,pane:i?'labels':'tilePane'}).addTo(map));$('base').value=b}
+let baseName='light',baseOpacity=1;
+function setBase(b){baseName=b;baseLayers.forEach(l=>map.removeLayer(l));baseLayers=(BASES[b]||[]).map(([u,a,z],i)=>L.tileLayer(u,{attribution:a,maxNativeZoom:z,maxZoom:19,pane:i?'labels':'tilePane',opacity:i?1:baseOpacity}).addTo(map));$('base').value=b;$('opwrap').hidden=b==='none';save()}
+function setOpacity(v){baseOpacity=v;if(baseLayers[0])baseLayers[0].setOpacity(v);$('opv').textContent=Math.round(v*100)+'%';save()}
 const $=id=>document.getElementById(id);
 const dark=document.documentElement.dataset.theme==='dark'||(!document.documentElement.dataset.theme&&matchMedia('(prefers-color-scheme: dark)').matches);
-setBase(dark?'dark':'light');
+let savedBase=null;try{const s=JSON.parse(localStorage.getItem('bikemap-v1')||'null');savedBase=s&&s.base;if(s&&s.opacity!=null)baseOpacity=+s.opacity}catch(e){}
+$('op').value=baseOpacity;$('opv').textContent=Math.round(baseOpacity*100)+'%';
+setBase(savedBase&&(BASES[savedBase]||savedBase==='none')?savedBase:dark?'dark':'light');
 
 const layers={};CATS.forEach(c=>layers[c.id]=L.layerGroup());
 let lengths={};
@@ -250,6 +257,7 @@ $('c-edmonton').onclick=()=>setCity('edmonton');
 $('m-type').onclick=()=>setMode('type');
 $('m-comfort').onclick=()=>setMode('comfort');
 $('base').onchange=e=>setBase(e.target.value);
+$('op').oninput=e=>setOpacity(+e.target.value);
 $('edit').onclick=()=>{editing=!editing;$('edit').setAttribute('aria-pressed',editing);$('edit').textContent=editing?'Done customizing':'Customize styles';$('reset').hidden=!editing;drawKey()};
 $('reset').onclick=()=>{styles[mode]=clone(DEF[mode]);restyle();drawKey();save()};
 $('here').onclick=()=>{
