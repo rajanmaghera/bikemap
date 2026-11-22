@@ -27,11 +27,21 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - name: Download and classify OpenStreetMap data
-        run: node scripts/build-data.cjs ${{ github.event.inputs.cities }}
+        env:
+          CITIES_INPUT: ${{ github.event.inputs.cities }}
+        run: |
+          # A push that doesn't change the sorting rules only fills in cities with no data yet
+          if [ "${{ github.event_name }}" = "push" ] && ! git diff --name-only HEAD~1 HEAD | grep -qx 'classify.js'; then
+            node scripts/build-data.cjs --missing
+          else
+            node scripts/build-data.cjs $CITIES_INPUT
+          fi
       - name: Commit updated data
         run: |
           git config user.name "github-actions[bot]"
