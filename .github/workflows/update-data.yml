@@ -2,6 +2,11 @@ name: Update bike network data
 
 on:
   workflow_dispatch:        # "Run workflow" button on the Actions tab
+    inputs:
+      cities:
+        description: 'City keys to rebuild, separated by spaces (blank = all cities in classify.js)'
+        required: false
+        default: ''
   push:                     # also runs when the sorting rules or this script change
     branches: [main]
     paths:
@@ -19,14 +24,14 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - name: Download and classify OpenStreetMap data
-        run: node scripts/build-data.cjs
+        run: node scripts/build-data.cjs ${{ github.event.inputs.cities }}
       - name: Commit updated data
         run: |
           git config user.name "github-actions[bot]"

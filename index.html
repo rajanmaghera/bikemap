@@ -69,15 +69,12 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 <div id="map" aria-label="Bike network map"></div>
 <section class="panel" id="panel">
  <div class="head">
-  <h1 id="ttl">Toronto bike network</h1>
+  <h1 id="ttl">Canadian bike networks</h1>
   <p class="sub">Line style shows how separated each route is from cars</p>
   <button class="toggle" id="tog" aria-expanded="true">Hide key</button>
  </div>
  <div class="body">
-  <div class="row"><div class="seg" role="group" aria-label="City">
-   <button id="c-toronto" aria-pressed="true">Toronto</button>
-   <button id="c-edmonton" aria-pressed="false">Edmonton</button>
-  </div><button id="here" title="Load the bike network for whatever area is on screen">Load this view</button></div>
+  <div class="row"><select id="city" aria-label="City" style="flex:1"></select><button id="here" title="Load the bike network for whatever area is on screen">Load this view</button></div>
   <div class="lbl">Style lines by</div>
   <div class="row"><div class="seg" role="group" aria-label="Style mode">
    <button id="m-type" aria-pressed="true">Type of route</button>
@@ -95,7 +92,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
   <div class="opw" id="opwrap"><label for="op">Basemap opacity</label><input type="range" id="op" min="0" max="1" step="0.05" value="1"><output id="opv">100%</output></div>
   <div class="drop" id="drop" hidden><div class="lbl">Couldn't reach OpenStreetMap? Load a file instead</div>
    <input type="file" id="file" accept=".json,.geojson"> Overpass JSON or GeoJSON export</div>
-  <p class="foot">*Thickness is at street level; lines thin out as you zoom out. Data: <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, saved weekly for both cities; Load this view fetches live through the Overpass API. Basemap: Esri gray canvas. Comfort levels follow the Can-BICS idea (high: protected from cars; medium: shared with walkers; low: paint only). Tap any line to see its tags.</p>
+  <p class="foot">*Thickness is at street level; lines thin out as you zoom out. Data: <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, saved for each city on the list; Load this view fetches live through the Overpass API. Basemap: Esri gray canvas. Comfort levels follow the Can-BICS idea (high: protected from cars; medium: shared with walkers; low: paint only). Tap any line to see its tags.</p>
  </div>
 </section>
 
@@ -120,8 +117,8 @@ const COMFORT=[
 ];
 const DASHES={solid:'',dashed:'10 7',long:'18 8',dotted:'1 6',dashdot:'12 5 2 5'};
 const DEF={
- type:{protected:{c:'#0b7a3e',w:6,d:'solid'},path:{c:'#22a45d',w:5,d:'solid'},multiuse:{c:'#2b7bd6',w:4,d:'dashed'},buffered:{c:'#e9a100',w:4,d:'solid'},painted:{c:'#f26b1d',w:3,d:'solid'},shared:{c:'#d42a2a',w:3,d:'dotted'}},
- comfort:{high:{c:'#0f8a46',w:6,d:'solid'},medium:{c:'#2b7bd6',w:4,d:'dashed'},low:{c:'#f07c1a',w:3,d:'solid'},none:{c:'#d42a2a',w:3,d:'dotted'}}
+ type:{protected:{c:'#729b44',w:7,d:'solid'},path:{c:'#729b44',w:7,d:'solid'},multiuse:{c:'#479ed3',w:3,d:'solid'},buffered:{c:'#85b952',w:2.5,d:'solid'},painted:{c:'#85b952',w:2.5,d:'solid'},shared:{c:'#858585',w:2.5,d:'dotted'}},
+ comfort:{high:{c:'#729b44',w:7,d:'solid'},medium:{c:'#479ed3',w:3,d:'solid'},low:{c:'#85b952',w:2.5,d:'solid'},none:{c:'#858585',w:2.5,d:'dotted'}}
 };
 const clone=o=>JSON.parse(JSON.stringify(o));
 let styles=clone(DEF),mode='type',city='toronto',hidden={},editing=false;
@@ -246,14 +243,14 @@ async function load(key,bbox,label,allowBundle){
   const n=addWays(ways);status(`${n.toLocaleString()} route segments in ${label} · live OSM data`);applyHidden();
  }catch(e){if(id!==loadId)return;status(`Couldn't load data (${e.message}). Try again in a minute, or load a file below.`,true);$('drop').hidden=false}
 }
-function setCity(c){city=c;save();
- ['toronto','edmonton'].forEach(k=>$('c-'+k).setAttribute('aria-pressed',k===c));
+$('city').innerHTML=Object.entries(CITIES).sort((a,b)=>a[1].name.localeCompare(b[1].name)).map(([k,c])=>`<option value="${k}">${esc(c.name)}</option>`).join('')+'<option value="view" disabled>This view (live)</option>';
+if(!CITIES[city])city='toronto';
+function setCity(c){city=c;save();$('city').value=c;
  $('ttl').textContent=CITIES[c].name+' bike network';
- map.setView(CITIES[c].center,CITIES[c].zoom);load(c,CITIES[c].bbox,CITIES[c].name,true)}
+ map.setView(CITIES[c].center,CITIES[c].zoom||13);load(c,CITIES[c].bbox,CITIES[c].name,true)}
 function setMode(m){mode=m;save();$('m-type').setAttribute('aria-pressed',m==='type');$('m-comfort').setAttribute('aria-pressed',m==='comfort');restyle();drawKey()}
 
-$('c-toronto').onclick=()=>setCity('toronto');
-$('c-edmonton').onclick=()=>setCity('edmonton');
+$('city').onchange=e=>setCity(e.target.value);
 $('m-type').onclick=()=>setMode('type');
 $('m-comfort').onclick=()=>setMode('comfort');
 $('base').onchange=e=>setBase(e.target.value);
@@ -263,7 +260,7 @@ $('reset').onclick=()=>{styles[mode]=clone(DEF[mode]);restyle();drawKey();save()
 $('here').onclick=()=>{
  if(map.getZoom()<11){status('Zoom in a bit further first (this keeps the download manageable).',true);return}
  const b=map.getBounds();$('ttl').textContent='Bike network in this view';
- ['toronto','edmonton'].forEach(k=>$('c-'+k).setAttribute('aria-pressed',false));
+ $('city').value='view';
  load('view'+b.toBBoxString(),[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()].map(x=>+x.toFixed(4)),'this view')};
 $('tog').onclick=()=>{const m=$('panel').classList.toggle('min');$('tog').textContent=m?'Show key':'Hide key';$('tog').setAttribute('aria-expanded',!m)};
 $('file').onchange=async e=>{

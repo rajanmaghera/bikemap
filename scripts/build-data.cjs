@@ -40,26 +40,35 @@ async function overpass(q) {
 (async () => {
   const cities = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(CITIES);
   fs.mkdirSync(path.join(__dirname, '..', 'data'), { recursive: true });
+  const failed = [];
   for (const key of cities) {
     const city = CITIES[key];
-    console.log(`Fetching ${city.name}…`);
-    const j = await overpass(query(city.bbox));
-    const ways = [];
-    const counts = {};
-    for (const e of j.elements || []) {
-      if (e.type !== 'way' || !e.geometry || e.geometry.length < 2) continue;
-      const t = e.tags || {};
-      const cat = classify(t);
-      if (!cat) continue;
-      const tags = {};
-      for (const k of KEEP) if (t[k]) tags[k] = t[k];
-      ways.push([e.id, cat, tags, e.geometry.map(p => [round(p.lat), round(p.lon)])]);
-      counts[cat] = (counts[cat] || 0) + 1;
+    if (!city) { console.warn(`Unknown city "${key}", skipping`); failed.push(key); continue; }
+    try {
+      console.log(`Fetching ${city.name}…`);
+      const j = await overpass(query(city.bbox));
+      const ways = [];
+      const counts = {};
+      for (const e of j.elements || []) {
+        if (e.type !== 'way' || !e.geometry || e.geometry.length < 2) continue;
+        const t = e.tags || {};
+        const cat = classify(t);
+        if (!cat) continue;
+        const tags = {};
+        for (const k of KEEP) if (t[k]) tags[k] = t[k];
+        ways.push([e.id, cat, tags, e.geometry.map(p => [round(p.lat), round(p.lon)])]);
+        counts[cat] = (counts[cat] || 0) + 1;
+      }
+      if (ways.length < 100) throw new Error(`only ${ways.length} ways, keeping the old file`);
+      const out = { city: key, generated: new Date().toISOString(), source: 'OpenStreetMap contributors, ODbL', ways };
+      fs.writeFileSync(path.join(__dirname, '..', 'data', `${key}.json`), JSON.stringify(out));
+      console.log(`  ${ways.length} ways`, counts);
+    } catch (e) {
+      console.error(`  ${city.name} failed: ${e.message}`);
+      failed.push(key);
     }
-    if (ways.length < 100) throw new Error(`${city.name}: only ${ways.length} ways, refusing to overwrite data`);
-    const out = { city: key, generated: new Date().toISOString(), source: 'OpenStreetMap contributors, ODbL', ways };
-    fs.writeFileSync(path.join(__dirname, '..', 'data', `${key}.json`), JSON.stringify(out));
-    console.log(`  ${ways.length} ways`, counts);
     await sleep(10000); // be polite to the public Overpass servers
   }
+  if (failed.length) console.warn(`Failed: ${failed.join(', ')}`);
+  if (failed.length === cities.length) process.exit(1);
 })().catch(e => { console.error(e); process.exit(1); });
