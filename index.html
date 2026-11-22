@@ -93,7 +93,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
   </div>
   <div class="drop" id="drop" hidden><div class="lbl">Couldn't reach OpenStreetMap? Load a file instead</div>
    <input type="file" id="file" accept=".json,.geojson"> Overpass JSON or GeoJSON export</div>
-  <p class="foot">Data: live from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> through the Overpass API. Comfort levels follow the Can-BICS idea (high: protected from cars; medium: shared with walkers; low: paint only). Tap any line to see its tags.</p>
+  <p class="foot">Data: live from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> through the Overpass API. Basemap: Esri gray canvas. Comfort levels follow the Can-BICS idea (high: protected from cars; medium: shared with walkers; low: paint only). Tap any line to see its tags.</p>
  </div>
 </section>
 
@@ -160,13 +160,15 @@ const groupOf=cat=>mode==='type'?cat:comfortOf(cat);
 const map=L.map('map',{preferCanvas:true,zoomControl:false}).setView(CITIES[city].center,CITIES[city].zoom);
 L.control.zoom({position:'topright'}).addTo(map);
 const renderer=L.canvas({padding:.4,tolerance:6});
+const ESRI='https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/',EATT='Tiles &copy; Esri, HERE, Garmin, &copy; OpenStreetMap contributors';
 const BASES={
- light:['https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png','&copy; OpenStreetMap contributors &copy; CARTO'],
- dark:['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png','&copy; OpenStreetMap contributors &copy; CARTO'],
- osm:['https://tile.openstreetmap.org/{z}/{x}/{y}.png','&copy; OpenStreetMap contributors']
+ light:[[ESRI+'World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',EATT,16],[ESRI+'World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}','',16]],
+ dark:[[ESRI+'World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',EATT,16],[ESRI+'World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}','',16]],
+ osm:[['https://tile.openstreetmap.org/{z}/{x}/{y}.png','&copy; OpenStreetMap contributors',19]]
 };
-let baseLayer=null;
-function setBase(b){if(baseLayer)map.removeLayer(baseLayer);baseLayer=null;if(BASES[b])baseLayer=L.tileLayer(BASES[b][0],{attribution:BASES[b][1],maxZoom:19,subdomains:'abcd'}).addTo(map);$('base').value=b}
+map.createPane('labels');map.getPane('labels').style.zIndex=450;map.getPane('labels').style.pointerEvents='none';
+let baseLayers=[];
+function setBase(b){baseLayers.forEach(l=>map.removeLayer(l));baseLayers=(BASES[b]||[]).map(([u,a,z],i)=>L.tileLayer(u,{attribution:a,maxNativeZoom:z,maxZoom:19,pane:i?'labels':'tilePane'}).addTo(map));$('base').value=b}
 const $=id=>document.getElementById(id);
 const dark=document.documentElement.dataset.theme==='dark'||(!document.documentElement.dataset.theme&&matchMedia('(prefers-color-scheme: dark)').matches);
 setBase(dark?'dark':'light');
